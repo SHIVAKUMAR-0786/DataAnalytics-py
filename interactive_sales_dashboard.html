@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Interactive Sales Performance Dashboard</title>
+  <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+  <style>
+    body{font-family:system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial; margin:16px; background:#f7f8fb; color:#111}
+    header{display:flex;gap:12px;align-items:center;margin-bottom:12px}
+    h1{font-size:18px;margin:0}
+    .controls{display:flex;gap:8px;flex-wrap:wrap}
+    .grid{display:grid;grid-template-columns:repeat(2,1fr);gap:12px}
+    .card{background:#fff;border-radius:8px;padding:12px;box-shadow:0 6px 18px rgba(10,20,40,0.06);min-height:260px}
+    .full{grid-column:1/-1}
+    label{font-size:13px;color:#333}
+    input[type=file]{padding:6px}
+    select, button{padding:8px;border-radius:6px;border:1px solid #dde3ef;background:#fff}
+    footer{margin-top:12px;font-size:13px;color:#555}
+    .small-note{font-size:12px;color:#666;margin-top:6px}
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>Interactive Sales Performance Dashboard</h1>
+      <div class="small-note">Upload your JSON file (array of objects) containing sales records to generate charts.</div>
+    </div>
+    <div style="margin-left:auto" class="controls">
+      <input id="fileInput" type="file" accept="application/json" />
+      <select id="outletFilter"><option value="__all__">All Outlets</option></select>
+      <button id="resetBtn">Reset Filters</button>
+    </div>
+  </header>
+
+  <main>
+    <div class="grid">
+      <div id="chart1" class="card"></div>
+      <div id="chart2" class="card"></div>
+      <div id="chart3" class="card full"></div>
+      <div id="chart4" class="card"></div>
+      <div id="chart5" class="card"></div>
+    </div>
+  </main>
+
+  <footer>
+    Tip: You can click legend items to toggle series. Use the Outlet filter to focus the dashboard on a single outlet type.
+  </footer>
+
+  <script>
+    // Utility helpers
+    const el = id => document.getElementById(id);
+
+    function safeParseJSON(text){
+      try{ return JSON.parse(text); }
+      catch(e){
+        // try to parse newline-delimited JSON
+        try{
+          const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+          return lines.map(l=>JSON.parse(l));
+        }catch(err){ throw new Error('Invalid JSON file.'); }
+      }
+    }
+
+    function groupBy(arr, keyFn){
+      return arr.reduce((acc,item)=>{
+        const k = keyFn(item);
+        if(!acc[k]) acc[k]=[]; acc[k].push(item); return acc;
+      },{});
+    }
+
+    // Aggregation functions
+    function sum(arr, field){ return arr.reduce((s, r)=> s + (Number(r[field])||0), 0); }
+    function avg(arr, field){ return arr.length ? sum(arr, field)/arr.length : 0; }
+
+    // Chart renderers
+    function renderTotalSalesByItemType(data){
+      const grouped = groupBy(data, d=>d['Item Type'] || d['ItemType'] || d.item_type || 'Unknown');
+      const labels = Object.keys(grouped);
+      const values = labels.map(l=> sum(grouped[l], 'Sales'));
+      const trace = { x: labels, y: values, type: 'bar', hovertemplate: '%{x}<br>Sales: %{y:.2f}<extra></extra>' };
+      const layout = { title: 'Total Sales by Item Type', margin:{t:40,l:40,r:20,b:80} };
+      Plotly.newPlot('chart1', [trace], layout, {responsive:true});
+    }
+
+    function renderSalesByOutletType(data){
+      const grouped = groupBy(data, d=>d['Outlet Type'] || d['OutletType'] || d.outlet_type || 'Unknown');
+      const labels = Object.keys(grouped);
+      const values = labels.map(l=> sum(grouped[l], 'Sales'));
+      const trace = { x: labels, y: values, type: 'bar', marker:{line:{width:0}}, hovertemplate: '%{x}<br>Sales: %{y:.2f}<extra></extra>' };
+      const layout = { title: 'Sales Performance by Outlet Type', margin:{t:40,l:40,r:20,b:80} };
+      Plotly.newPlot('chart2', [trace], layout, {responsive:true});
+    }
+
+    function renderSalesTrendByEstYear(data){
+      const grouped = groupBy(data, d=>{ const v = d['Outlet Establishment Year'] || d.outlet_establishment_year || d.establishment_year || d.year || null; return v==null?'Unknown':String(v); });
+      const years = Object.keys(grouped).filter(k=>k!=='Unknown').sort((a,b)=>Number(a)-Number(b));
+      // keep Unknown at end if exists
+      if(Object.keys(grouped).includes('Unknown')) years.push('Unknown');
+      const values = years.map(y=> sum(grouped[y], 'Sales'));
+      const trace = { x: years, y: values, type: 'scatter', mode:'lines+markers', hovertemplate: '%{x}<br>Sales: %{y:.2f}<extra></extra>' };
+      const layout = { title: 'Sales Trend over Outlet Establishment Year', margin:{t:40,l:40,r:20,b:60} };
+      Plotly.newPlot('chart3', [trace], layout, {responsive:true});
+    }
+
+    function renderAvgSalesByFatContent(data){
+      const grouped = groupBy(data, d=>d['Item Fat Content'] || d.item_fat_content || d.fat_content || 'Unknown');
+      const labels = Object.keys(grouped);
+      const values = labels.map(l=> avg(grouped[l], 'Sales'));
+      const trace = { labels, values, type:'pie', hovertemplate: '%{label}<br>Avg Sales: %{value:.2f}<extra></extra>' };
+      const layout = { title: 'Average Sales vs. Item Fat Content', margin:{t:40,l:20,r:20,b:20} };
+      Plotly.newPlot('chart4', [trace], layout, {responsive:true});
+    }
+
+    function renderDonutOutletLocation(data){
+      const grouped = groupBy(data, d=>d['Outlet Location Type'] || d.outlet_location_type || d.location_type || d['Outlet Location'] || 'Unknown');
+      const labels = Object.keys(grouped);
+      const avgSales = labels.map(l=> avg(grouped[l], 'Sales'));
+      const avgRating = labels.map(l=> avg(grouped[l], 'Rating'));
+      const trace = {
+        labels, values: avgSales, type:'pie', hole:0.45,
+        hovertemplate: '%{label}<br>Avg Sales: %{value:.2f}<br>Avg Rating: %{customdata:.2f}<extra></extra>',
+        customdata: avgRating
+      };
+      const layout = { title: 'Outlet Location Type — Avg Sales (Donut) — hover shows Avg Rating', margin:{t:40,l:20,r:20,b:20} };
+      Plotly.newPlot('chart5', [trace], layout, {responsive:true});
+    }
+
+    // Top-level draw function
+    function drawAllCharts(dataset){
+      // dataset is array of objects
+      renderTotalSalesByItemType(dataset);
+      renderSalesByOutletType(dataset);
+      renderSalesTrendByEstYear(dataset);
+      renderAvgSalesByFatContent(dataset);
+      renderDonutOutletLocation(dataset);
+    }
+
+    // Filter utilities for Outlet Type dropdown
+    function populateOutletFilter(dataset){
+      const select = el('outletFilter');
+      const key = 'Outlet Type';
+      const values = Array.from(new Set(dataset.map(d=>d[key] || d.outlet_type || d.outletType || 'Unknown'))).filter(Boolean);
+      // clear existing (keep first option All)
+      select.querySelectorAll('option:not([value="__all__"])').forEach(o=>o.remove());
+      values.sort().forEach(v=>{
+        const opt = document.createElement('option'); opt.value=v; opt.textContent=v; select.appendChild(opt);
+      });
+    }
+
+    function applyOutletFilter(dataset){
+      const f = el('outletFilter').value;
+      if(f==='__all__') return dataset;
+      return dataset.filter(d=> (d['Outlet Type']||d.outlet_type||d.outletType||'') === f);
+    }
+
+    // File input handling
+    let originalData = null;
+    el('fileInput').addEventListener('change', async (ev)=>{
+      const file = ev.target.files && ev.target.files[0];
+      if(!file) return;
+      try{
+        const text = await file.text();
+        const parsed = safeParseJSON(text);
+        if(!Array.isArray(parsed)) throw new Error('JSON should be an array of objects.');
+        originalData = parsed.map(normalizeRecord);
+        populateOutletFilter(originalData);
+        const filtered = applyOutletFilter(originalData);
+        drawAllCharts(filtered);
+      }catch(err){
+        alert('Error reading file: ' + err.message);
+        console.error(err);
+      }
+    });
+
+    // Normalize field names (best-effort)
+    function normalizeRecord(r){
+      // map common variants to canonical keys
+      return {
+        'Item Type': r['Item Type'] ?? r['ItemType'] ?? r.item_type ?? r['itemType'] ?? 'Unknown',
+        'Outlet Type': r['Outlet Type'] ?? r['OutletType'] ?? r.outlet_type ?? r['outlet type'] ?? 'Unknown',
+        'Outlet Establishment Year': r['Outlet Establishment Year'] ?? r.outlet_establishment_year ?? r.establishment_year ?? r.year ?? null,
+        'Item Fat Content': r['Item Fat Content'] ?? r.item_fat_content ?? r.fat_content ?? 'Unknown',
+        'Outlet Location Type': r['Outlet Location Type'] ?? r.outlet_location_type ?? r.location_type ?? r['Outlet Location'] ?? 'Unknown',
+        'Sales': Number(r['Sales'] ?? r.sales ?? r.Sales ?? 0),
+        'Rating': Number(r['Rating'] ?? r.rating ?? 0),
+        // keep raw for fallback
+        ...r
+      };
+    }
+
+    // Filter change
+    el('outletFilter').addEventListener('change', ()=>{
+      if(!originalData) return;
+      const filtered = applyOutletFilter(originalData);
+      drawAllCharts(filtered);
+    });
+
+    el('resetBtn').addEventListener('click', ()=>{
+      el('outletFilter').value='__all__';
+      if(!originalData) return;
+      drawAllCharts(originalData);
+    });
+
+    // Provide a small sample dataset in console for quick testing
+    console.log('Dashboard ready. Upload your JSON file to generate charts.');
+  </script>
+</body>
+</html>
